@@ -1,13 +1,12 @@
-
 """
-Multi-Modal YouTube Viral, 2D/3D Image, Music & Cinematic Video AI Agent
-========================================================================
+Multi-Modal YouTube Viral, 2D/3D Image, Music & Free Motion MP4 AI Agent
+=========================================================================
 Orchestrates:
 1. YouTube Trend & Hook Research (YouTube Data API v3 + Gemini)
-2. 2D Image & Thumbnail Generation (Gemini Nano Banana / gemini-3.1-flash-image)
+2. 2D Image Generation (Gemini / Free Pollinations Fallback / Pillow Fallback)
 3. 3D Model Generation (Tripo AI API)
 4. Suno-style Song & Music Generation (ElevenLabs Eleven Music API)
-5. Optional Cinematic MP4 Video Generation (Gemini Video / Veo API)
+5. 100% Free Cinematic Auto-Motion MP4 Video (Ken Burns Zoom + Audio Mux)
 """
 
 from __future__ import annotations
@@ -15,13 +14,19 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import time
 from pathlib import Path
 from typing import Any, TypedDict
+from urllib.parse import quote
 
+import imageio.v2 as imageio
+import imageio_ffmpeg
+import numpy as np
 import requests
 from dotenv import load_dotenv
 from langgraph.graph import END, START, StateGraph
+from PIL import Image, ImageDraw
 
 load_dotenv()
 
@@ -59,6 +64,23 @@ def _call_with_retry(fn, retries: int = 3, delay: float = 3.0):
                 continue
             raise
     raise last_err
+
+
+def _create_fallback_image(path: Path, width: int, height: int) -> None:
+    """Creates a clean gradient backdrop if external image APIs are unavailable."""
+    arr = np.zeros((height, width, 3), dtype=np.uint8)
+    y_grad = np.linspace(20, 95, height, dtype=np.uint8)[:, None]
+    arr[:, :, 0] = y_grad
+    arr[:, :, 1] = np.linspace(35, 130, height, dtype=np.uint8)[:, None]
+    arr[:, :, 2] = np.linspace(90, 210, height, dtype=np.uint8)[:, None]
+    img = Image.fromarray(arr, mode="RGB")
+    draw = ImageDraw.Draw(img)
+    draw.ellipse(
+        [width // 4, height // 3, 3 * width // 4, height // 3 + width // 2],
+        outline=(255, 220, 120),
+        width=6,
+    )
+    img.save(path, format="PNG")
 
 
 # ---------------------------------------------------------------------------
@@ -128,7 +150,7 @@ def write_hooks_and_prompts(state: AgentState) -> dict[str, Any]:
             "retention_loop": "End with an unresolved visual cliffhanger looping back to frame 1.",
             "prompt_2d": (
                 f"Vibrant 3D Pixar-style illustration for '{topic}', expressive hero character "
-                "centered in 9:16 vertical frame, dramatic studio rim lighting, clean composition"
+                "centered in frame, dramatic studio rim lighting, clean composition"
             ),
             "prompt_3d": f"Stylized cute 3D character asset for {topic}, clean topology, game-ready",
             "prompt_music": (
@@ -164,19 +186,21 @@ def write_hooks_and_prompts(state: AgentState) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# 4. Node 3: 2D Image & 3D Model Generator
+# 4. Node 3: 2D Image (with Free Fallback) & 3D Model Generator
 # ---------------------------------------------------------------------------
 def generate_2d_and_3d(state: AgentState) -> dict[str, Any]:
-    """Generates a 2D image via Gemini Nano Banana and submits a 3D task to Tripo AI."""
+    """Generates a 2D image (Gemini -> Free Pollinations -> Pillow) and Tripo 3D task."""
     pkg = state["hook_package"]
     gemini_key = os.getenv("GEMINI_API_KEY")
     tripo_key = os.getenv("TRIPO_API_KEY")
     warnings = list(state.get("warnings", []))
 
-    image_path = str(OUTPUT_DIR / "generated_2d_scene.png")
+    width, height = (720, 1280) if state["content_format"] == "shorts" else (1280, 720)
+    image_path = OUTPUT_DIR / "generated_2d_scene.png"
     tripo_task_id = "dry_run_tripo_task_001"
+    image_created = False
 
-    # --- 2D Generation (Gemini Nano Banana) ---
+    # 1) Try Gemini Image API first in Live mode
     if not state["dry_run"] and gemini_key:
         try:
             from google import genai
@@ -190,10 +214,32 @@ def generate_2d_and_3d(state: AgentState) -> dict[str, Any]:
             )
             for part in res.candidates[0].content.parts:
                 if getattr(part, "inline_data", None):
-                    Path(image_path).write_bytes(part.inline_data.data)
+                    image_path.write_bytes(part.inline_data.data)
+                    image_created = True
                     break
-        except Exception as exc:
-            warnings.append(f"2D Image generation skipped: {exc}")
+        except Exception:
+            pass
+
+    # 2) Free Pollinations fallback (no API key needed)
+    if not image_created and not state["dry_run"]:
+        try:
+            encoded = quote(pkg["prompt_2d"])
+            poll_url = (
+                f"https://image.pollinations.ai/prompt/{encoded}"
+                f"?width={width}&height={height}&nologo=true"
+            )
+            r = requests.get(poll_url, timeout=45)
+            if r.status_code == 200 and len(r.content) > 5000:
+                image_path.write_bytes(r.content)
+                image_created = True
+        except Exception:
+            pass
+
+    # 3) Local Pillow fallback so video assembly always has a valid frame
+    if not image_created:
+        _create_fallback_image(image_path, width, height)
+        if not state["dry_run"]:
+            warnings.append("Free image fallback used; check Gemini billing for Nano Banana 2.")
 
     # --- 3D Generation (Tripo AI API) ---
     if not state["dry_run"] and tripo_key:
@@ -209,7 +255,7 @@ def generate_2d_and_3d(state: AgentState) -> dict[str, Any]:
         except Exception as exc:
             warnings.append(f"3D generation skipped: {exc}")
 
-    return {"image_2d_path": image_path, "model_3d_task_id": tripo_task_id, "warnings": warnings}
+    return {"image_2d_path": str(image_path), "model_3d_task_id": tripo_task_id, "warnings": warnings}
 
 
 # ---------------------------------------------------------------------------
@@ -242,43 +288,68 @@ def compose_music(state: AgentState) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# 6. Node 5: Cinematic MP4 Video Generator (Gemini Video / Veo API)
+# 6. Node 5: 100% Free Cinematic Auto-Motion MP4 Generator
 # ---------------------------------------------------------------------------
 def generate_cinematic_video(state: AgentState) -> dict[str, Any]:
-    """Generates a cinematic MP4 clip using Gemini Video API when enabled."""
-    if not state.get("generate_video") or state["dry_run"]:
+    """Creates a smooth Ken Burns zoom-in MP4 video from the 2D scene (+ optional music)."""
+    if not state.get("generate_video"):
         return {"video_mp4_path": ""}
 
-    gemini_key = os.getenv("GEMINI_API_KEY")
-    if not gemini_key:
+    img_path = Path(state.get("image_2d_path", ""))
+    if not img_path.exists():
         return {"video_mp4_path": ""}
 
-    pkg = state["hook_package"]
-    warnings = list(state.get("warnings", []))
-    video_path = str(OUTPUT_DIR / "cinematic_clip.mp4")
-    aspect_ratio = "9:16" if state["content_format"] == "shorts" else "16:9"
+    width, height = (720, 1280) if state["content_format"] == "shorts" else (1280, 720)
+    raw_mp4 = OUTPUT_DIR / "raw_motion.mp4"
+    final_mp4 = OUTPUT_DIR / "cinematic_clip.mp4"
 
-    try:
-        from google import genai
-        from google.genai import types
+    # Load and resize base image slightly larger for smooth zoom headroom
+    base_img = Image.open(img_path).convert("RGB").resize((int(width * 1.18), int(height * 1.18)), Image.LANCZOS)
+    bw, bh = base_img.size
 
-        client = genai.Client(api_key=gemini_key)
-        operation = client.models.generate_videos(
-            model="veo-3.1-generate-001",
-            prompt=pkg.get("prompt_video", pkg["prompt_2d"]),
-            config=types.GenerateVideosConfig(aspect_ratio=aspect_ratio),
+    fps = 24
+    duration_sec = 5
+    total_frames = fps * duration_sec
+
+    writer = imageio.get_writer(str(raw_mp4), fps=fps, codec="libx264", pixelformat="yuv420p")
+    for idx in range(total_frames):
+        progress = idx / max(total_frames - 1, 1)
+        scale = 1.0 + 0.14 * progress  # smooth 14% zoom-in
+        crop_w = int(bw / scale)
+        crop_h = int(bh / scale)
+        left = (bw - crop_w) // 2
+        top = (bh - crop_h) // 2
+        frame = base_img.crop((left, top, left + crop_w, top + crop_h)).resize((width, height), Image.BILINEAR)
+        writer.append_data(np.array(frame))
+    writer.close()
+
+    # Mux music if generated_song.mp3 exists
+    audio_path = Path(state.get("music_audio_path", ""))
+    if audio_path.exists() and audio_path.stat().st_size > 1000:
+        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+        subprocess.run(
+            [
+                ffmpeg_exe,
+                "-y",
+                "-i",
+                str(raw_mp4),
+                "-i",
+                str(audio_path),
+                "-c:v",
+                "copy",
+                "-c:a",
+                "aac",
+                "-shortest",
+                str(final_mp4),
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
-        while not operation.done:
-            time.sleep(10)
-            operation = client.operations.get(operation)
+    else:
+        raw_mp4.replace(final_mp4)
 
-        generated = operation.response.generated_videos[0]
-        client.files.download(file=generated.video)
-        generated.video.save(video_path)
-        return {"video_mp4_path": video_path, "warnings": warnings}
-    except Exception as exc:
-        warnings.append(f"Cinematic Video (Veo) skipped: {exc}")
-        return {"video_mp4_path": "", "warnings": warnings}
+    return {"video_mp4_path": str(final_mp4)}
 
 
 # ---------------------------------------------------------------------------
@@ -307,7 +378,7 @@ if __name__ == "__main__":
     parser.add_argument("--prompt", type=str, default="Cute 3D Squirrel Tamil Kids Song")
     parser.add_argument("--format", choices=["shorts", "long_form"], default="shorts")
     parser.add_argument("--live", action="store_true", help="Call live APIs using .env keys")
-    parser.add_argument("--video", action="store_true", help="Generate cinematic MP4 via Veo")
+    parser.add_argument("--video", action="store_true", help="Generate free Auto-Motion MP4")
     args = parser.parse_args()
 
     app = build_agent()
@@ -327,4 +398,3 @@ if __name__ == "__main__":
         }
     )
     print(json.dumps(result, indent=2, ensure_ascii=False))
-
