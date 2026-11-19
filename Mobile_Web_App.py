@@ -1,9 +1,8 @@
-
 """
 Password-Protected Mobile Web App for the Multi-Modal YouTube AI Agent
 ======================================================================
 Run locally or deploy to Streamlit Community Cloud / Render / Railway:
-  pip install streamlit
+  pip install -r requirements.txt
   streamlit run Mobile_Web_App.py
 """
 
@@ -67,7 +66,7 @@ with col_out:
         st.session_state["authenticated"] = False
         st.rerun()
 
-st.write("ஒரே பிராம்ட் மூலம் வைரல் ஹூக், 2D/3D காட்சி, பாடல் மற்றும் சினிமாட்டிக் வீடியோவை உருவாக்குங்கள்.")
+st.write("ஒரே பிராம்ட் மூலம் வைரல் ஹூக், 2D/3D காட்சி, பாடல் மற்றும் இலவச MP4 வீடியோவை உருவாக்குங்கள்.")
 
 with st.form("agent_form"):
     user_prompt = st.text_area(
@@ -82,7 +81,7 @@ with st.form("agent_form"):
         horizontal=True,
     )
     use_live = st.toggle("Live APIs பயன்படுத்துக (.env விசைகள் தேவை)", value=False)
-    make_video = st.toggle("🎬 சினிமாட்டிக் MP4 வீடியோ உருவாக்குக (Veo API)", value=False)
+    make_video = st.toggle("🎬 இலவச MP4 வீடியோ உருவாக்குக (Auto-Motion)", value=True)
     run_btn = st.form_submit_button("ஏஜென்ட்டை இயக்கு (Generate)", use_container_width=True)
 
 if run_btn:
@@ -90,7 +89,7 @@ if run_btn:
         st.warning("தயவுசெய்து ஒரு தலைப்பு அல்லது பிராம்ட்டை உள்ளிடவும்.")
         st.stop()
 
-    with st.spinner("AI ஏஜென்ட் ஆய்வு, 2D/3D, இசை மற்றும் வீடியோவை உருவாக்குகிறது..."):
+    with st.spinner("AI ஏஜென்ட் ஆய்வு, 2D/3D, இசை மற்றும் MP4 வீடியோவை உருவாக்குகிறது..."):
         agent = build_agent()
         result = agent.invoke(
             {
@@ -121,6 +120,18 @@ if run_btn:
     st.info(f"**முதல் 3 வினாடி ஹூக்:** {pkg.get('first_3s_hook', '')}")
     st.caption(f"**தக்கவைப்பு உத்தி (Loop):** {pkg.get('retention_loop', '')}")
 
+    st.subheader("🎬 இலவச MP4 வீடியோ (Auto-Motion)")
+    vid_path = Path(result.get("video_mp4_path", ""))
+    if vid_path.exists() and result.get("video_mp4_path"):
+        st.video(str(vid_path))
+        st.download_button(
+            "MP4 வீடியோவைப் பதிவிறக்குக",
+            data=vid_path.read_bytes(),
+            file_name=vid_path.name,
+            mime="video/mp4",
+            use_container_width=True,
+        )
+
     st.subheader("🎨 2D & 3D காட்சித் தகவல்கள்")
     st.text_area("2D Image Prompt", value=pkg.get("prompt_2d", ""), height=80)
     img_path = Path(result.get("image_2d_path", ""))
@@ -135,19 +146,6 @@ if run_btn:
         )
 
     st.code(f"3D Prompt: {pkg.get('prompt_3d', '')}\nTripo 3D Task ID: {result.get('model_3d_task_id', '')}")
-
-    st.subheader("🎬 சினிமாட்டிக் வீடியோ (Veo)")
-    st.text_area("Video Prompt", value=pkg.get("prompt_video", ""), height=70)
-    vid_path = Path(result.get("video_mp4_path", ""))
-    if vid_path.exists() and result.get("video_mp4_path"):
-        st.video(str(vid_path))
-        st.download_button(
-            "சினிமாட்டிக் வீடியோவைப் பதிவிறக்குக (MP4)",
-            data=vid_path.read_bytes(),
-            file_name=vid_path.name,
-            mime="video/mp4",
-            use_container_width=True,
-        )
 
     st.subheader("🎵 பாடல் & இசை (Suno-Style)")
     st.text_area("Music Prompt", value=pkg.get("prompt_music", ""), height=70)
