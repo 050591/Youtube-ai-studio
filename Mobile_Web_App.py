@@ -66,12 +66,12 @@ with col_out:
         st.session_state["authenticated"] = False
         st.rerun()
 
-st.write("ஒரே பிராம்ட் மூலம் வைரல் ஹூக், 2D/3D காட்சி, பாடல் மற்றும் இலவச MP4 வீடியோவை உருவாக்குங்கள்.")
+st.write("ஒரே பிராம்ட் மூலம் வைரல் ஹூக், 4-காட்சி கதை, குரல்/இசை மற்றும் Shorts MP4 வீடியோவை உருவாக்குங்கள்.")
 
 with st.form("agent_form"):
     user_prompt = st.text_area(
         "உங்கள் வீடியோ தலைப்பு / பிராம்ட் (Tamil or English)",
-        placeholder="எ.கா. Cute 3D Squirrel Tamil Kids Balloon Song",
+        placeholder="எ.கா. Cute cozy sweater character complaining about boring planet",
         height=90,
     )
     content_format = st.radio(
@@ -81,7 +81,7 @@ with st.form("agent_form"):
         horizontal=True,
     )
     use_live = st.toggle("Live APIs பயன்படுத்துக (.env விசைகள் தேவை)", value=False)
-    make_video = st.toggle("🎬 இலவச MP4 வீடியோ உருவாக்குக (Auto-Motion)", value=True)
+    make_video = st.toggle("🎬 4-காட்சி MP4 வீடியோ + Captions + குரல் உருவாக்குக", value=True)
     run_btn = st.form_submit_button("ஏஜென்ட்டை இயக்கு (Generate)", use_container_width=True)
 
 if run_btn:
@@ -89,7 +89,7 @@ if run_btn:
         st.warning("தயவுசெய்து ஒரு தலைப்பு அல்லது பிராம்ட்டை உள்ளிடவும்.")
         st.stop()
 
-    with st.spinner("AI ஏஜென்ட் ஆய்வு, 2D/3D, இசை மற்றும் MP4 வீடியோவை உருவாக்குகிறது..."):
+    with st.spinner("4 காட்சிகள், Captions, குரல் மற்றும் MP4 வீடியோ உருவாகிறது..."):
         agent = build_agent()
         result = agent.invoke(
             {
@@ -99,6 +99,7 @@ if run_btn:
                 "generate_video": make_video,
                 "trending_videos": [],
                 "hook_package": {},
+                "scene_image_paths": [],
                 "image_2d_path": "",
                 "model_3d_task_id": "",
                 "music_audio_path": "",
@@ -120,7 +121,7 @@ if run_btn:
     st.info(f"**முதல் 3 வினாடி ஹூக்:** {pkg.get('first_3s_hook', '')}")
     st.caption(f"**தக்கவைப்பு உத்தி (Loop):** {pkg.get('retention_loop', '')}")
 
-    st.subheader("🎬 இலவச MP4 வீடியோ (Auto-Motion)")
+    st.subheader("🎬 4-காட்சி Shorts MP4 வீடியோ")
     vid_path = Path(result.get("video_mp4_path", ""))
     if vid_path.exists() and vid_path.stat().st_size > 0:
         vid_bytes = vid_path.read_bytes()
@@ -135,30 +136,21 @@ if run_btn:
     else:
         st.info("MP4 வீடியோ உருவாக்கப்படவில்லை.")
 
-    st.subheader("🎨 2D & 3D காட்சித் தகவல்கள்")
-    st.text_area("2D Image Prompt", value=pkg.get("prompt_2d", ""), height=80)
-    img_path = Path(result.get("image_2d_path", ""))
-    if img_path.exists():
-        img_bytes = img_path.read_bytes()
-        st.image(img_bytes, caption="உருவாக்கப்பட்ட 2D காட்சி", use_container_width=True)
-        st.download_button(
-            "2D படத்தைப் பதிவிறக்குக",
-            data=img_bytes,
-            file_name=img_path.name,
-            mime="image/png",
-            use_container_width=True,
-        )
+    st.subheader("🎨 காட்சிகள் (4-Scene Storyboard)")
+    for idx, sc_path_str in enumerate(result.get("scene_image_paths", []), start=1):
+        sc_path = Path(sc_path_str)
+        if sc_path.exists():
+            st.image(sc_path.read_bytes(), caption=f"காட்சி {idx}", use_container_width=True)
 
     st.code(f"3D Prompt: {pkg.get('prompt_3d', '')}\nTripo 3D Task ID: {result.get('model_3d_task_id', '')}")
 
-    st.subheader("🎵 பாடல் & இசை (Suno-Style)")
-    st.text_area("Music Prompt", value=pkg.get("prompt_music", ""), height=70)
+    st.subheader("🎵 குரல் & இசை")
     audio_path = Path(result.get("music_audio_path", ""))
-    if audio_path.exists():
+    if audio_path.exists() and audio_path.stat().st_size > 0:
         audio_bytes = audio_path.read_bytes()
         st.audio(audio_bytes, format="audio/mp3")
         st.download_button(
-            "பாடலைப் பதிவிறக்குக (MP3)",
+            "ஒலியைப் பதிவிறக்குக (MP3)",
             data=audio_bytes,
             file_name=audio_path.name,
             mime="audio/mpeg",
