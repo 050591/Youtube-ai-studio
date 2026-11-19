@@ -220,15 +220,15 @@ def generate_2d_and_3d(state: AgentState) -> dict[str, Any]:
         except Exception:
             pass
 
-    # 2) Free Pollinations fallback (no API key needed)
+    # 2) Free Pollinations fallback (with browser User-Agent)
     if not image_created and not state["dry_run"]:
         try:
-            encoded = quote(pkg["prompt_2d"])
+            encoded = quote(pkg["prompt_2d"][:350])
             poll_url = (
                 f"https://image.pollinations.ai/prompt/{encoded}"
-                f"?width={width}&height={height}&nologo=true"
+                f"?width={width}&height={height}&nologo=true&model=flux"
             )
-            r = requests.get(poll_url, timeout=45)
+            r = requests.get(poll_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=60)
             if r.status_code == 200 and len(r.content) > 5000:
                 image_path.write_bytes(r.content)
                 image_created = True
@@ -303,7 +303,6 @@ def generate_cinematic_video(state: AgentState) -> dict[str, Any]:
     raw_mp4 = OUTPUT_DIR / "raw_motion.mp4"
     final_mp4 = OUTPUT_DIR / "cinematic_clip.mp4"
 
-    # Load and resize base image slightly larger for smooth zoom headroom
     base_img = Image.open(img_path).convert("RGB").resize((int(width * 1.18), int(height * 1.18)), Image.LANCZOS)
     bw, bh = base_img.size
 
@@ -314,7 +313,7 @@ def generate_cinematic_video(state: AgentState) -> dict[str, Any]:
     writer = imageio.get_writer(str(raw_mp4), fps=fps, codec="libx264", pixelformat="yuv420p")
     for idx in range(total_frames):
         progress = idx / max(total_frames - 1, 1)
-        scale = 1.0 + 0.14 * progress  # smooth 14% zoom-in
+        scale = 1.0 + 0.14 * progress
         crop_w = int(bw / scale)
         crop_h = int(bh / scale)
         left = (bw - crop_w) // 2
@@ -323,7 +322,6 @@ def generate_cinematic_video(state: AgentState) -> dict[str, Any]:
         writer.append_data(np.array(frame))
     writer.close()
 
-    # Mux music if generated_song.mp3 exists
     audio_path = Path(state.get("music_audio_path", ""))
     if audio_path.exists() and audio_path.stat().st_size > 1000:
         ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
