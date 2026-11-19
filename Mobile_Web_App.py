@@ -1,4 +1,4 @@
-```python
+
 """
 Password-Protected Mobile Web App for the Multi-Modal YouTube AI Agent
 ======================================================================
@@ -161,4 +161,3 @@ if run_btn:
             mime="audio/mpeg",
             use_container_width=True,
         )
-```
