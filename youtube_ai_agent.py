@@ -154,7 +154,7 @@ def write_hooks_and_prompts(state: AgentState) -> dict[str, Any]:
     )
     response = _call_with_retry(
         lambda: client.models.generate_content(
-            model="gemini-flash-latest",
+            model="gemini-3.6-flash",
             contents=f"{system_prompt}\n\nUser Topic: {topic}",
             config={"response_mime_type": "application/json"},
         )
