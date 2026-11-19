@@ -137,8 +137,8 @@ def write_hooks_and_prompts(state: AgentState) -> dict[str, Any]:
         "prompt_3d (English), prompt_music (English)."
     )
     response = client.models.generate_content(
-        model="gemini-flash-latest",
-        contents=f"{system_prompt}\n\nUser Topic: {topic}",
+        model="gemini-3.8-flash",
+        contents=f"{system_prompt}\n\contents=f\"{system_prompt}\\n\\nUser Topic: {topic}\",nUser Topic: {topic}",
         config={"response_mime_type": "application/json"},
     )
     hook_pkg = json.loads(response.text)
@@ -163,7 +163,7 @@ def generate_2d_and_3d(state: AgentState) -> dict[str, Any]:
 
         client = genai.Client(api_key=gemini_key)
         res = client.models.generate_content(
-            model="gemini-2.5-flash-image",
+            model="gemini-3.1-flash-image",
             contents=pkg["prompt_2d"],
         )
         for part in res.candidates[0].content.parts:
