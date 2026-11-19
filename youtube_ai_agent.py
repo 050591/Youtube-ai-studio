@@ -3,7 +3,7 @@ Multi-Modal YouTube Viral, 2D/3D Image, Music & Free Motion MP4 AI Agent
 =========================================================================
 Orchestrates:
 1. YouTube Trend & Hook Research (YouTube Data API v3 + Gemini)
-2. 2D Image Generation (Gemini / Free Pollinations Fallback / Pillow Fallback)
+2. 2D Image Generation (Gemini -> Hugging Face FLUX.1-schnell -> Pollinations -> Pillow)
 3. 3D Model Generation (Tripo AI API)
 4. Suno-style Song & Music Generation (ElevenLabs Eleven Music API)
 5. 100% Free Cinematic Auto-Motion MP4 Video (Ken Burns Zoom + Audio Mux)
@@ -186,12 +186,13 @@ def write_hooks_and_prompts(state: AgentState) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# 4. Node 3: 2D Image (with Free Fallback) & 3D Model Generator
+# 4. Node 3: 2D Image (Gemini -> HuggingFace FLUX -> Pollinations -> Pillow) & 3D
 # ---------------------------------------------------------------------------
 def generate_2d_and_3d(state: AgentState) -> dict[str, Any]:
-    """Generates a 2D image (Gemini -> Free Pollinations -> Pillow) and Tripo 3D task."""
+    """Generates a 2D image and submits a 3D task to Tripo AI."""
     pkg = state["hook_package"]
     gemini_key = os.getenv("GEMINI_API_KEY")
+    hf_token = os.getenv("HF_TOKEN")
     tripo_key = os.getenv("TRIPO_API_KEY")
     warnings = list(state.get("warnings", []))
 
@@ -220,7 +221,23 @@ def generate_2d_and_3d(state: AgentState) -> dict[str, Any]:
         except Exception:
             pass
 
-    # 2) Free Pollinations fallback (with browser User-Agent)
+    # 2) Free Hugging Face FLUX.1-schnell (requires free HF_TOKEN in Secrets)
+    if not image_created and not state["dry_run"] and hf_token:
+        try:
+            hf_url = "https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell"
+            r = requests.post(
+                hf_url,
+                headers={"Authorization": f"Bearer {hf_token}"},
+                json={"inputs": pkg["prompt_2d"], "parameters": {"width": width, "height": height}},
+                timeout=60,
+            )
+            if r.status_code == 200 and len(r.content) > 5000:
+                image_path.write_bytes(r.content)
+                image_created = True
+        except Exception:
+            pass
+
+    # 3) Free Pollinations fallback
     if not image_created and not state["dry_run"]:
         try:
             encoded = quote(pkg["prompt_2d"][:350])
@@ -235,11 +252,11 @@ def generate_2d_and_3d(state: AgentState) -> dict[str, Any]:
         except Exception:
             pass
 
-    # 3) Local Pillow fallback so video assembly always has a valid frame
+    # 4) Local Pillow fallback so video assembly always has a valid frame
     if not image_created:
         _create_fallback_image(image_path, width, height)
         if not state["dry_run"]:
-            warnings.append("Free image fallback used; check Gemini billing for Nano Banana 2.")
+            warnings.append("Real AI image failed; add free HF_TOKEN in Streamlit Secrets for FLUX images.")
 
     # --- 3D Generation (Tripo AI API) ---
     if not state["dry_run"] and tripo_key:
