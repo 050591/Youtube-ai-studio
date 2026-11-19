@@ -137,7 +137,7 @@ def write_hooks_and_prompts(state: AgentState) -> dict[str, Any]:
         "prompt_3d (English), prompt_music (English)."
     )
     response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model="gemini-flash-latest",
         contents=f"{system_prompt}\n\nUser Topic: {topic}",
         config={"response_mime_type": "application/json"},
     )
