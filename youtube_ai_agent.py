@@ -1,4 +1,4 @@
-```python
+
 """
 Multi-Modal YouTube Viral, 2D/3D Image, Music & Cinematic Video AI Agent
 ========================================================================
@@ -327,4 +327,4 @@ if __name__ == "__main__":
         }
     )
     print(json.dumps(result, indent=2, ensure_ascii=False))
-```
+
