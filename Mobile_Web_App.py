@@ -1,12 +1,10 @@
+```python
 """
 Password-Protected Mobile Web App for the Multi-Modal YouTube AI Agent
 ======================================================================
 Run locally or deploy to Streamlit Community Cloud / Render / Railway:
   pip install streamlit
-  streamlit run mobile_web_app.py
-
-Environment variable (.env):
-  APP_PASSWORD=your_strong_mobile_password
+  streamlit run Mobile_Web_App.py
 """
 
 from __future__ import annotations
@@ -69,7 +67,7 @@ with col_out:
         st.session_state["authenticated"] = False
         st.rerun()
 
-st.write("ஒரே பிராம்ட் மூலம் வைரல் ஹூக், 2D/3D காட்சி மற்றும் பாடலை உருவாக்குங்கள்.")
+st.write("ஒரே பிராம்ட் மூலம் வைரல் ஹூக், 2D/3D காட்சி, பாடல் மற்றும் சினிமாட்டிக் வீடியோவை உருவாக்குங்கள்.")
 
 with st.form("agent_form"):
     user_prompt = st.text_area(
@@ -84,6 +82,7 @@ with st.form("agent_form"):
         horizontal=True,
     )
     use_live = st.toggle("Live APIs பயன்படுத்துக (.env விசைகள் தேவை)", value=False)
+    make_video = st.toggle("🎬 சினிமாட்டிக் MP4 வீடியோ உருவாக்குக (Veo API)", value=False)
     run_btn = st.form_submit_button("ஏஜென்ட்டை இயக்கு (Generate)", use_container_width=True)
 
 if run_btn:
@@ -91,20 +90,26 @@ if run_btn:
         st.warning("தயவுசெய்து ஒரு தலைப்பு அல்லது பிராம்ட்டை உள்ளிடவும்.")
         st.stop()
 
-    with st.spinner("AI ஏஜென்ட் ஆய்வு, 2D/3D மற்றும் இசையை உருவாக்குகிறது..."):
+    with st.spinner("AI ஏஜென்ட் ஆய்வு, 2D/3D, இசை மற்றும் வீடியோவை உருவாக்குகிறது..."):
         agent = build_agent()
         result = agent.invoke(
             {
                 "user_prompt": user_prompt.strip(),
                 "content_format": content_format,
                 "dry_run": not use_live,
+                "generate_video": make_video,
                 "trending_videos": [],
                 "hook_package": {},
                 "image_2d_path": "",
                 "model_3d_task_id": "",
                 "music_audio_path": "",
+                "video_mp4_path": "",
+                "warnings": [],
             }
         )
+
+    for warn in result.get("warnings", []):
+        st.warning(warn)
 
     pkg = result.get("hook_package", {})
     st.success("உருவாக்கம் முடிந்தது!")
@@ -131,6 +136,19 @@ if run_btn:
 
     st.code(f"3D Prompt: {pkg.get('prompt_3d', '')}\nTripo 3D Task ID: {result.get('model_3d_task_id', '')}")
 
+    st.subheader("🎬 சினிமாட்டிக் வீடியோ (Veo)")
+    st.text_area("Video Prompt", value=pkg.get("prompt_video", ""), height=70)
+    vid_path = Path(result.get("video_mp4_path", ""))
+    if vid_path.exists() and result.get("video_mp4_path"):
+        st.video(str(vid_path))
+        st.download_button(
+            "சினிமாட்டிக் வீடியோவைப் பதிவிறக்குக (MP4)",
+            data=vid_path.read_bytes(),
+            file_name=vid_path.name,
+            mime="video/mp4",
+            use_container_width=True,
+        )
+
     st.subheader("🎵 பாடல் & இசை (Suno-Style)")
     st.text_area("Music Prompt", value=pkg.get("prompt_music", ""), height=70)
     audio_path = Path(result.get("music_audio_path", ""))
@@ -143,3 +161,4 @@ if run_btn:
             mime="audio/mpeg",
             use_container_width=True,
         )
+```
