@@ -122,24 +122,28 @@ if run_btn:
 
     st.subheader("🎬 இலவச MP4 வீடியோ (Auto-Motion)")
     vid_path = Path(result.get("video_mp4_path", ""))
-    if vid_path.exists() and result.get("video_mp4_path"):
-        st.video(str(vid_path))
+    if vid_path.exists() and vid_path.stat().st_size > 0:
+        vid_bytes = vid_path.read_bytes()
+        st.video(vid_bytes, format="video/mp4")
         st.download_button(
             "MP4 வீடியோவைப் பதிவிறக்குக",
-            data=vid_path.read_bytes(),
+            data=vid_bytes,
             file_name=vid_path.name,
             mime="video/mp4",
             use_container_width=True,
         )
+    else:
+        st.info("MP4 வீடியோ உருவாக்கப்படவில்லை.")
 
     st.subheader("🎨 2D & 3D காட்சித் தகவல்கள்")
     st.text_area("2D Image Prompt", value=pkg.get("prompt_2d", ""), height=80)
     img_path = Path(result.get("image_2d_path", ""))
     if img_path.exists():
-        st.image(str(img_path), caption="உருவாக்கப்பட்ட 2D காட்சி", use_container_width=True)
+        img_bytes = img_path.read_bytes()
+        st.image(img_bytes, caption="உருவாக்கப்பட்ட 2D காட்சி", use_container_width=True)
         st.download_button(
             "2D படத்தைப் பதிவிறக்குக",
-            data=img_path.read_bytes(),
+            data=img_bytes,
             file_name=img_path.name,
             mime="image/png",
             use_container_width=True,
@@ -151,10 +155,11 @@ if run_btn:
     st.text_area("Music Prompt", value=pkg.get("prompt_music", ""), height=70)
     audio_path = Path(result.get("music_audio_path", ""))
     if audio_path.exists():
-        st.audio(str(audio_path), format="audio/mp3")
+        audio_bytes = audio_path.read_bytes()
+        st.audio(audio_bytes, format="audio/mp3")
         st.download_button(
             "பாடலைப் பதிவிறக்குக (MP3)",
-            data=audio_path.read_bytes(),
+            data=audio_bytes,
             file_name=audio_path.name,
             mime="audio/mpeg",
             use_container_width=True,
