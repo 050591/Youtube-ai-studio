@@ -1,25 +1,27 @@
 """
-Multi-Modal YouTube Viral, Multi-Scene Shorts MP4, 2D/3D & Music AI Agent
+Multi-Modal YouTube Viral, Multi-Scene Shorts MP4, 2D/3D & Voice AI Agent
 =========================================================================
-Orchestrates:
-1. YouTube Trend & Hook Research (YouTube Data API v3 + Gemini)
-2. 4-Scene Viral Storyboard & Consistent Character Prompts
-3. Multi-Scene 2D Images (Gemini -> HF FLUX.1-schnell -> Pollinations -> Pillow) + 3D
-4. Free Voiceover (gTTS) or Suno-style Music (ElevenLabs Music API)
-5. Multi-Scene MP4 Assembly with Top-Center Captions & Ken Burns Motion
+Upgraded with:
+1. Gemini 2.5 Flash Viral Storyboard (Tamil & English support)
+2. Multi-Scene 2D Images (Gemini Imagen 3 -> HF FLUX.1 -> Pollinations -> Pillow)
+3. Natural Neural Voiceover (Edge-TTS Tamil/English -> gTTS fallback)
+4. Audio-Synced Multi-Scene MP4 with Ken Burns Motion & Captions
 """
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
 from typing import Any, TypedDict
 from urllib.parse import quote
 
+import edge_tts
 import imageio.v2 as imageio
 import imageio_ffmpeg
 import numpy as np
@@ -46,6 +48,7 @@ class AgentState(TypedDict):
     trending_videos: list[dict[str, Any]]
     hook_package: dict[str, Any]
     scene_image_paths: list[str]
+    scene_audio_paths: list[str]
     image_2d_path: str
     model_3d_task_id: str
     music_audio_path: str
@@ -53,15 +56,18 @@ class AgentState(TypedDict):
     warnings: list[str]
 
 
+def _is_tamil(text: str) -> bool:
+    return bool(re.search(r"[\u0B80-\u0BFF]", text))
+
+
 def _call_with_retry(fn, retries: int = 3, delay: float = 3.0):
-    """Retries transient 503/429 API spikes automatically."""
     last_err = None
     for attempt in range(retries):
         try:
             return fn()
         except Exception as exc:
             last_err = exc
-            if attempt < retries - 1 and ("503" in str(exc) or "UNAVAILABLE" in str(exc)):
+            if attempt < retries - 1 and ("503" in str(exc) or "429" in str(exc) or "UNAVAILABLE" in str(exc)):
                 time.sleep(delay * (attempt + 1))
                 continue
             raise
@@ -69,7 +75,6 @@ def _call_with_retry(fn, retries: int = 3, delay: float = 3.0):
 
 
 def _create_fallback_image(path: Path, width: int, height: int, idx: int = 0) -> None:
-    """Creates a clean gradient backdrop if external image APIs are unavailable."""
     arr = np.zeros((height, width, 3), dtype=np.uint8)
     shift = (idx * 25) % 80
     arr[:, :, 0] = np.linspace(25 + shift, 95, height, dtype=np.uint8)[:, None]
@@ -93,28 +98,53 @@ def _draw_top_caption(img: Image.Image, text: str) -> Image.Image:
     draw = ImageDraw.Draw(out)
     w, h = out.size
     try:
-        font = ImageFont.load_default(size=max(28, w // 18))
+        font = ImageFont.load_default(size=max(26, w // 20))
     except TypeError:
         font = ImageFont.load_default()
 
-    bbox = draw.textbbox((0, 0), text, font=font)
+    # Keep caption within safe horizontal width
+    display_text = text[:42] + ("..." if len(text) > 42 else "")
+    bbox = draw.textbbox((0, 0), display_text, font=font)
     tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    pad_x, pad_y = 28, 16
+    pad_x, pad_y = 26, 16
     box_x1 = max(20, (w - tw) // 2 - pad_x)
-    box_y1 = int(h * 0.10)
+    box_y1 = int(h * 0.08)
     box_x2 = min(w - 20, (w + tw) // 2 + pad_x)
     box_y2 = box_y1 + th + pad_y * 2
 
-    draw.rounded_rectangle([box_x1, box_y1, box_x2, box_y2], radius=22, fill=(15, 23, 42))
-    draw.text(((w - tw) // 2, box_y1 + pad_y), text, fill=(255, 255, 255), font=font)
+    draw.rounded_rectangle([box_x1, box_y1, box_x2, box_y2], radius=20, fill=(15, 23, 42))
+    draw.text(((w - tw) // 2, box_y1 + pad_y), display_text, fill=(255, 235, 59), font=font)
     return out
+
+
+def _get_audio_duration(audio_path: Path) -> float:
+    """Measures exact MP3 duration using FFmpeg."""
+    try:
+        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+        res = subprocess.run(
+            [ffmpeg_exe, "-i", str(audio_path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        match = re.search(r"Duration:\s*(\d+):(\d+):(\d+\.\d+)", res.stderr)
+        if match:
+            hrs, mins, secs = float(match.group(1)), float(match.group(2)), float(match.group(3))
+            return max(2.0, hrs * 3600 + mins * 60 + secs)
+    except Exception:
+        pass
+    return 3.5
+
+
+async def _synthesize_edge_tts(text: str, out_path: Path, voice: str) -> None:
+    communicate = edge_tts.Communicate(text, voice)
+    await communicate.save(str(out_path))
 
 
 # ---------------------------------------------------------------------------
 # 2. Node 1: YouTube Algorithm & Trend Researcher
 # ---------------------------------------------------------------------------
 def research_youtube(state: AgentState) -> dict[str, Any]:
-    """Fetches top-performing YouTube videos for the topic to analyze hooks."""
     topic = state["user_prompt"]
     api_key = os.getenv("YOUTUBE_API_KEY")
 
@@ -126,39 +156,41 @@ def research_youtube(state: AgentState) -> dict[str, Any]:
             ]
         }
 
-    url = "https://www.googleapis.com/youtube/v3/search"
-    params = {
-        "part": "snippet",
-        "q": topic,
-        "type": "video",
-        "order": "viewCount",
-        "maxResults": 5,
-        "key": api_key,
-    }
-    resp = requests.get(url, params=params, timeout=20)
-    resp.raise_for_status()
-    items = resp.json().get("items", [])
-
-    trends = [
-        {
-            "title": item["snippet"]["title"],
-            "channel": item["snippet"]["channelTitle"],
-            "video_id": item["id"]["videoId"],
+    try:
+        url = "https://www.googleapis.com/youtube/v3/search"
+        params = {
+            "part": "snippet",
+            "q": topic,
+            "type": "video",
+            "order": "viewCount",
+            "maxResults": 5,
+            "key": api_key,
         }
-        for item in items
-    ]
-    return {"trending_videos": trends}
+        resp = requests.get(url, params=params, timeout=20)
+        resp.raise_for_status()
+        items = resp.json().get("items", [])
+        trends = [
+            {
+                "title": item["snippet"]["title"],
+                "channel": item["snippet"]["channelTitle"],
+                "video_id": item["id"]["videoId"],
+            }
+            for item in items
+        ]
+        return {"trending_videos": trends}
+    except Exception:
+        return {"trending_videos": []}
 
 
 # ---------------------------------------------------------------------------
 # 3. Node 2: 4-Scene Viral Storyboard & Hook Architect
 # ---------------------------------------------------------------------------
 def write_hooks_and_prompts(state: AgentState) -> dict[str, Any]:
-    """Generates viral hooks and a 4-scene storyboard with consistent character prompts."""
     topic = state["user_prompt"]
     fmt = state["content_format"]
     trends = state.get("trending_videos", [])
     gemini_key = os.getenv("GEMINI_API_KEY")
+    tamil_mode = _is_tamil(topic) or "tamil" in topic.lower()
 
     if state["dry_run"] or not gemini_key:
         hook_pkg = {
@@ -173,24 +205,24 @@ def write_hooks_and_prompts(state: AgentState) -> dict[str, Any]:
             "prompt_music": f"Upbeat playful pop beat for {topic}, 120 BPM, bright synths",
             "scenes": [
                 {
-                    "caption": "Wait for the surprise...",
-                    "voice_line": f"Look at this amazing {topic}!",
-                    "image_prompt": f"Cute 2D cozy illustration of {topic}, curious expression, warm pastel background",
+                    "caption": "WAIT FOR IT...",
+                    "voice_line": "நில்லுங்க! இன்னைக்கு ஒரு செம ஆச்சரியம் காத்திருக்கு!" if tamil_mode else f"Look at this amazing {topic}!",
+                    "image_prompt": f"Cute 2D vibrant cartoon illustration of {topic}, curious expression, cinematic lighting",
                 },
                 {
-                    "caption": "Everything changed!",
-                    "voice_line": "Suddenly, something magical happened!",
-                    "image_prompt": f"Same cute 2D character from {topic} looking amazed at glowing sparkles, warm pastel background",
+                    "caption": "THE BIG TWIST!",
+                    "voice_line": "திடீர்னு அங்க ஒரு பெரிய மாற்றம் நடந்துச்சு!" if tamil_mode else "Suddenly, something magical happened!",
+                    "image_prompt": f"Same cute 2D character from {topic} looking amazed at glowing sparkles, vibrant cartoon style",
                 },
                 {
-                    "caption": "Faster and higher!",
-                    "voice_line": "Up and away into the sky!",
-                    "image_prompt": f"Same cute 2D character from {topic} floating happily with colorful balloons, warm pastel background",
+                    "caption": "UNBELIEVABLE!",
+                    "voice_line": "யாரும் எதிர்பார்க்காத ஒரு திருப்பம்!" if tamil_mode else "Up and away into the sky!",
+                    "image_prompt": f"Same cute 2D character from {topic} in an exciting action pose, vibrant cartoon style",
                 },
                 {
-                    "caption": "Watch again!",
-                    "voice_line": "And that is how the magic begins!",
-                    "image_prompt": f"Same cute 2D character from {topic} laughing and waving goodbye, warm pastel background",
+                    "caption": "WATCH AGAIN!",
+                    "voice_line": "உங்களுக்கு பிடிச்சிருந்தா லைக் பண்ணுங்க!" if tamil_mode else "And that is how the magic begins!",
+                    "image_prompt": f"Same cute 2D character from {topic} laughing and waving happily, vibrant cartoon style",
                 },
             ],
         }
@@ -199,21 +231,26 @@ def write_hooks_and_prompts(state: AgentState) -> dict[str, Any]:
     from google import genai
 
     client = genai.Client(api_key=gemini_key)
+    voice_lang_rule = (
+        "Natural spoken Tamil in Tamil Unicode script (தமிழ்)"
+        if tamil_mode
+        else "Natural punchy spoken English"
+    )
     system_prompt = (
         "You are a viral YouTube Shorts director. "
         f"Format: {fmt}. Trends: {json.dumps(trends, ensure_ascii=False)}. "
         "Return ONLY valid JSON with keys: "
-        "viral_titles (list of 2 Tamil/English titles), "
+        "viral_titles (list of 2 catchy Tamil/English titles), "
         "first_3s_hook (Tamil), retention_loop (string), "
         "prompt_2d (English), prompt_3d (English), prompt_music (English), "
         "and scenes (list of EXACTLY 4 objects, each with: "
-        "'caption' (short 3-5 word English overlay text), "
-        "'voice_line' (short 6-10 word English spoken sentence), "
+        "'caption' (short 3-5 word punchy English overlay text), "
+        f"'voice_line' (1 short spoken sentence in {voice_lang_rule}), "
         "'image_prompt' (detailed English prompt keeping the SAME character & art style across all 4 scenes))."
     )
     response = _call_with_retry(
         lambda: client.models.generate_content(
-            model="gemini-3.6-flash",
+            model="gemini-2.5-flash",
             contents=f"{system_prompt}\n\nUser Topic: {topic}",
             config={"response_mime_type": "application/json"},
         )
@@ -226,20 +263,24 @@ def write_hooks_and_prompts(state: AgentState) -> dict[str, Any]:
 # 4. Node 3: Multi-Scene 2D Image & 3D Model Generator
 # ---------------------------------------------------------------------------
 def _fetch_single_image(prompt: str, path: Path, width: int, height: int, dry_run: bool, idx: int) -> bool:
-    """Generates one image using Gemini -> HF FLUX -> Pollinations -> Pillow."""
     gemini_key = os.getenv("GEMINI_API_KEY")
     hf_token = os.getenv("HF_TOKEN")
 
     if not dry_run and gemini_key:
         try:
             from google import genai
+            from google.genai import types
 
             client = genai.Client(api_key=gemini_key)
-            res = client.models.generate_content(model="gemini-3.1-flash-image", contents=prompt)
-            for part in res.candidates[0].content.parts:
-                if getattr(part, "inline_data", None):
-                    path.write_bytes(part.inline_data.data)
-                    return True
+            aspect = "9:16" if height > width else "16:9"
+            res = client.models.generate_images(
+                model="imagen-3.0-generate-002",
+                prompt=prompt,
+                config=types.GenerateImagesConfig(number_of_images=1, aspect_ratio=aspect),
+            )
+            if res.generated_images:
+                path.write_bytes(res.generated_images[0].image.image_bytes)
+                return True
         except Exception:
             pass
 
@@ -277,7 +318,6 @@ def _fetch_single_image(prompt: str, path: Path, width: int, height: int, dry_ru
 
 
 def generate_2d_and_3d(state: AgentState) -> dict[str, Any]:
-    """Generates up to 4 scene images for the storyboard and submits a 3D task."""
     pkg = state["hook_package"]
     tripo_key = os.getenv("TRIPO_API_KEY")
     warnings = list(state.get("warnings", []))
@@ -297,7 +337,7 @@ def generate_2d_and_3d(state: AgentState) -> dict[str, Any]:
         scene_paths.append(str(sc_path))
 
     if any_fallback:
-        warnings.append("Some scenes used fallback graphics; verify HF_TOKEN in Streamlit Secrets.")
+        warnings.append("சில காட்சிகளுக்கு fallback graphics பயன்படுத்தப்பட்டது (HF_TOKEN / GEMINI_API_KEY சரிபார்க்கவும்).")
 
     tripo_task_id = "dry_run_tripo_task_001"
     if not state["dry_run"] and tripo_key:
@@ -322,53 +362,65 @@ def generate_2d_and_3d(state: AgentState) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# 5. Node 4: Voiceover (Free gTTS) / Music (ElevenLabs)
+# 5. Node 4: Per-Scene Natural Neural Voiceover (Edge-TTS Tamil/English)
 # ---------------------------------------------------------------------------
 def compose_music(state: AgentState) -> dict[str, Any]:
-    """Generates music via ElevenLabs if key exists, otherwise free gTTS voiceover."""
+    """Generates scene-by-scene Edge-TTS neural voiceover and merges full audio."""
     pkg = state["hook_package"]
-    eleven_key = os.getenv("ELEVENLABS_API_KEY")
     warnings = list(state.get("warnings", []))
-    audio_path = OUTPUT_DIR / "generated_audio.mp3"
+    scenes = pkg.get("scenes", [])[:4]
+    full_audio_path = OUTPUT_DIR / "generated_audio.mp3"
+    scene_audio_paths: list[str] = []
 
-    if not state["dry_run"] and eleven_key:
+    for idx, sc in enumerate(scenes):
+        line = sc.get("voice_line", "").strip() or state["user_prompt"]
+        sc_audio = OUTPUT_DIR / f"scene_audio_{idx + 1}.mp3"
+        voice = "ta-IN-ValluvarNeural" if _is_tamil(line) else "en-US-ChristopherNeural"
         try:
-            resp = requests.post(
-                "https://api.elevenlabs.io/v1/music",
-                headers={"xi-api-key": eleven_key, "Content-Type": "application/json"},
-                json={"prompt": pkg["prompt_music"], "music_length_ms": 20000},
-                timeout=120,
+            asyncio.run(_synthesize_edge_tts(line, sc_audio, voice))
+            scene_audio_paths.append(str(sc_audio))
+        except Exception:
+            try:
+                lang = "ta" if _is_tamil(line) else "en"
+                gTTS(text=line, lang=lang, slow=False).save(str(sc_audio))
+                scene_audio_paths.append(str(sc_audio))
+            except Exception as exc:
+                warnings.append(f"Scene {idx + 1} voice failed: {exc}")
+
+    # Concatenate all scene MP3s into one master audio track
+    if scene_audio_paths:
+        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+        concat_txt = OUTPUT_DIR / "audio_list.txt"
+        concat_txt.write_text(
+            "\n".join(f"file '{Path(p).resolve()}'" for p in scene_audio_paths),
+            encoding="utf-8",
+        )
+        try:
+            subprocess.run(
+                [ffmpeg_exe, "-y", "-f", "concat", "-safe", "0", "-i", str(concat_txt), "-c", "copy", str(full_audio_path)],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
-            resp.raise_for_status()
-            audio_path.write_bytes(resp.content)
-            return {"music_audio_path": str(audio_path), "warnings": warnings}
         except Exception as exc:
-            warnings.append(f"ElevenLabs skipped ({exc}); using free voiceover.")
+            warnings.append(f"Audio merge warning: {exc}")
 
-    # Free gTTS voiceover from the 4 scene voice_lines
-    try:
-        scenes = pkg.get("scenes", [])
-        narration = " ".join(s.get("voice_line", "") for s in scenes).strip()
-        if not narration:
-            narration = state["user_prompt"]
-        tts = gTTS(text=narration, lang="en", slow=False)
-        tts.save(str(audio_path))
-    except Exception as exc:
-        warnings.append(f"Free voiceover skipped: {exc}")
-        return {"music_audio_path": "", "warnings": warnings}
-
-    return {"music_audio_path": str(audio_path), "warnings": warnings}
+    return {
+        "scene_audio_paths": scene_audio_paths,
+        "music_audio_path": str(full_audio_path) if full_audio_path.exists() else "",
+        "warnings": warnings,
+    }
 
 
 # ---------------------------------------------------------------------------
-# 6. Node 5: Multi-Scene Shorts MP4 with Top-Center Captions & Audio
+# 6. Node 5: Audio-Synced Multi-Scene MP4 with Motion & Captions
 # ---------------------------------------------------------------------------
 def generate_cinematic_video(state: AgentState) -> dict[str, Any]:
-    """Stitches 4 animated scenes with top-center captions and voiceover/music."""
     if not state.get("generate_video"):
         return {"video_mp4_path": ""}
 
     scene_paths = state.get("scene_image_paths") or []
+    scene_audio_paths = state.get("scene_audio_paths") or []
     scenes = state.get("hook_package", {}).get("scenes", [])
     if not scene_paths:
         return {"video_mp4_path": ""}
@@ -376,16 +428,20 @@ def generate_cinematic_video(state: AgentState) -> dict[str, Any]:
     width, height = (720, 1280) if state["content_format"] == "shorts" else (1280, 720)
     raw_mp4 = OUTPUT_DIR / "raw_motion.mp4"
     final_mp4 = OUTPUT_DIR / "cinematic_clip.mp4"
-
     fps = 24
-    sec_per_scene = 3
-    frames_per_scene = fps * sec_per_scene
 
     writer = imageio.get_writer(str(raw_mp4), fps=fps, codec="libx264", pixelformat="yuv420p")
     for idx, img_file in enumerate(scene_paths):
         p = Path(img_file)
         if not p.exists():
             continue
+
+        # Sync each scene's duration exactly to its voiceover duration
+        sec_per_scene = 3.2
+        if idx < len(scene_audio_paths) and Path(scene_audio_paths[idx]).exists():
+            sec_per_scene = _get_audio_duration(Path(scene_audio_paths[idx]))
+        frames_per_scene = max(fps * 2, int(fps * sec_per_scene))
+
         caption = scenes[idx].get("caption", "") if idx < len(scenes) else ""
         base_img = Image.open(p).convert("RGB").resize((int(width * 1.16), int(height * 1.16)), Image.LANCZOS)
         bw, bh = base_img.size
@@ -469,6 +525,7 @@ if __name__ == "__main__":
             "trending_videos": [],
             "hook_package": {},
             "scene_image_paths": [],
+            "scene_audio_paths": [],
             "image_2d_path": "",
             "model_3d_task_id": "",
             "music_audio_path": "",
