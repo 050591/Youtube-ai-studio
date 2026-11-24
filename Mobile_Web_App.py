@@ -1,158 +1,86 @@
 """
-Password-Protected Mobile Web App for the Multi-Modal YouTube AI Agent
-======================================================================
-Run locally or deploy to Streamlit Community Cloud / Render / Railway:
-  pip install -r requirements.txt
-  streamlit run Mobile_Web_App.py
+YouTube AI Studio — Mobile Web App (Streamlit)
+==============================================
+Password-protected mobile UI for generating prompt-to-video YouTube Shorts
+with autonomous character voiceovers and background music.
 """
 
-from __future__ import annotations
-
-import hmac
 import os
-from pathlib import Path
-
 import streamlit as st
-from dotenv import load_dotenv
+from youtube_ai_agent import run_youtube_agent
 
-from youtube_ai_agent import build_agent
+st.set_page_config(page_title="YouTube AI Studio", page_icon="🎬", layout="centered")
 
-load_dotenv()
+# Load Streamlit Cloud Secrets into environment variables
+for key in ["APP_PASSWORD", "GEMINI_API_KEY", "YOUTUBE_API_KEY", "HF_TOKEN", "ELEVENLABS_API_KEY"]:
+    if key in st.secrets and st.secrets[key]:
+        os.environ[key] = str(st.secrets[key])
 
-st.set_page_config(
-    page_title="YouTube AI Studio",
-    page_icon="🎬",
-    layout="centered",
-    initial_sidebar_state="collapsed",
-)
+# Simple Password Gate
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
 
-
-def check_password() -> bool:
-    """Simple timing-safe password gate for mobile browser access."""
-    expected_pw = os.getenv("APP_PASSWORD", "tamilai2026")
-
-    if st.session_state.get("authenticated"):
-        return True
-
-    st.title("🎬 YouTube AI ஏஜென்ட்")
-    st.caption("பாதுகாப்பான மொபைல் உள்நுழைவு (Mobile Login)")
-
-    with st.form("login_form"):
-        entered_pw = st.text_input("கடவுச்சொல் (Password)", type="password")
-        submitted = st.form_submit_button("உள்நுழைக (Login)", use_container_width=True)
-
-    if submitted:
-        if hmac.compare_digest(entered_pw, expected_pw):
-            st.session_state["authenticated"] = True
+app_pw = os.getenv("APP_PASSWORD", "")
+if app_pw and not st.session_state.authenticated:
+    st.title("🎬 YouTube AI Studio")
+    entered = st.text_input("Password", type="password")
+    if st.button("Unlock", use_container_width=True):
+        if entered == app_pw:
+            st.session_state.authenticated = True
             st.rerun()
         else:
-            st.error("தவறான கடவுச்சொல். மீண்டும் முயற்சிக்கவும்.")
-
-    return False
-
-
-if not check_password():
+            st.error("Incorrect password.")
     st.stop()
 
+st.title("🎬 YouTube AI Studio")
+st.caption("Prompt → AI Video + Character Voices + Background Music")
 
-# ---------------------------------------------------------------------------
-# Authenticated Mobile Dashboard
-# ---------------------------------------------------------------------------
-col_head, col_out = st.columns([4, 1])
-with col_head:
-    st.title("🎬 YouTube AI Studio")
-with col_out:
-    if st.button("Logout", use_container_width=True):
-        st.session_state["authenticated"] = False
-        st.rerun()
+prompt = st.text_area(
+    "உங்கள் வீடியோ ப்ராம்ட் (Video Prompt)",
+    placeholder="உதா: இரண்டு நண்பர்கள் AI பற்றி பேசும் ஒரு நகைச்சுவை Tamil Short...",
+    height=110,
+)
 
-st.write("ஒரே பிராம்ட் மூலம் வைரல் ஹூக், 4-காட்சி கதை, குரல்/இசை மற்றும் Shorts MP4 வீடியோவை உருவாக்குங்கள்.")
+col1, col2 = st.columns(2)
+with col1:
+    language = st.selectbox("குரல் மொழி (Voice Language)", ["Tamil", "English"])
+with col2:
+    dry_run = st.checkbox("Dry Run (Test Mode)", value=False)
 
-with st.form("agent_form"):
-    user_prompt = st.text_area(
-        "உங்கள் வீடியோ தலைப்பு / பிராம்ட் (Tamil or English)",
-        placeholder="எ.கா. Cute cozy sweater character complaining about boring planet",
-        height=90,
-    )
-    content_format = st.radio(
-        "வீடியோ வகை",
-        options=["shorts", "long_form"],
-        format_func=lambda x: "YouTube Shorts (9:16)" if x == "shorts" else "Long-Form (16:9)",
-        horizontal=True,
-    )
-    use_live = st.toggle("Live APIs பயன்படுத்துக (.env விசைகள் தேவை)", value=False)
-    make_video = st.toggle("🎬 4-காட்சி MP4 வீடியோ + Captions + குரல் உருவாக்குக", value=True)
-    run_btn = st.form_submit_button("ஏஜென்ட்டை இயக்கு (Generate)", use_container_width=True)
-
-if run_btn:
-    if not user_prompt.strip():
-        st.warning("தயவுசெய்து ஒரு தலைப்பு அல்லது பிராம்ட்டை உள்ளிடவும்.")
+if st.button("🚀 Generate Full Video", type="primary", use_container_width=True):
+    if not prompt.strip():
+        st.warning("தயவுசெய்து ஒரு ப்ராம்ட் உள்ளிடவும்.")
         st.stop()
 
-    with st.spinner("4 காட்சிகள், Captions, குரல் மற்றும் MP4 வீடியோ உருவாகிறது..."):
-        agent = build_agent()
-        result = agent.invoke(
-            {
-                "user_prompt": user_prompt.strip(),
-                "content_format": content_format,
-                "dry_run": not use_live,
-                "generate_video": make_video,
-                "trending_videos": [],
-                "hook_package": {},
-                "scene_image_paths": [],
-                "image_2d_path": "",
-                "model_3d_task_id": "",
-                "music_audio_path": "",
-                "video_mp4_path": "",
-                "warnings": [],
-            }
+    with st.spinner("AI வீடியோ, கேரக்டர் குரல்கள் மற்றும் இசை உருவாகிறது..."):
+        result = run_youtube_agent(
+            user_prompt=prompt.strip(),
+            language=language,
+            content_format="shorts",
+            dry_run=dry_run,
         )
 
-    for warn in result.get("warnings", []):
-        st.warning(warn)
+    storyboard = result.get("storyboard", {})
+    st.subheader(storyboard.get("title", "Generated Short"))
+    st.write(storyboard.get("description", ""))
 
-    pkg = result.get("hook_package", {})
-    st.success("உருவாக்கம் முடிந்தது!")
+    video_path = result.get("final_video_path", "")
+    if video_path and os.path.exists(video_path):
+        st.video(video_path)
+        with open(video_path, "rb") as f:
+            st.download_button(
+                "⬇️ Download MP4",
+                data=f,
+                file_name="youtube_ai_short.mp4",
+                mime="video/mp4",
+                use_container_width=True,
+            )
 
-    st.subheader("🔥 வைரல் தலைப்புகள் & 3-வினாடி ஹூக்")
-    for idx, title in enumerate(pkg.get("viral_titles", []), start=1):
-        st.markdown(f"**{idx}.** {title}")
-
-    st.info(f"**முதல் 3 வினாடி ஹூக்:** {pkg.get('first_3s_hook', '')}")
-    st.caption(f"**தக்கவைப்பு உத்தி (Loop):** {pkg.get('retention_loop', '')}")
-
-    st.subheader("🎬 4-காட்சி Shorts MP4 வீடியோ")
-    vid_path = Path(result.get("video_mp4_path", ""))
-    if vid_path.exists() and vid_path.stat().st_size > 0:
-        vid_bytes = vid_path.read_bytes()
-        st.video(vid_bytes, format="video/mp4")
-        st.download_button(
-            "MP4 வீடியோவைப் பதிவிறக்குக",
-            data=vid_bytes,
-            file_name=vid_path.name,
-            mime="video/mp4",
-            use_container_width=True,
-        )
-    else:
-        st.info("MP4 வீடியோ உருவாக்கப்படவில்லை.")
-
-    st.subheader("🎨 காட்சிகள் (4-Scene Storyboard)")
-    for idx, sc_path_str in enumerate(result.get("scene_image_paths", []), start=1):
-        sc_path = Path(sc_path_str)
-        if sc_path.exists():
-            st.image(sc_path.read_bytes(), caption=f"காட்சி {idx}", use_container_width=True)
-
-    st.code(f"3D Prompt: {pkg.get('prompt_3d', '')}\nTripo 3D Task ID: {result.get('model_3d_task_id', '')}")
-
-    st.subheader("🎵 குரல் & இசை")
-    audio_path = Path(result.get("music_audio_path", ""))
-    if audio_path.exists() and audio_path.stat().st_size > 0:
-        audio_bytes = audio_path.read_bytes()
-        st.audio(audio_bytes, format="audio/mp3")
-        st.download_button(
-            "ஒலியைப் பதிவிறக்குக (MP3)",
-            data=audio_bytes,
-            file_name=audio_path.name,
-            mime="audio/mpeg",
-            use_container_width=True,
-        )
+    with st.expander("🎭 Character Script & Logs"):
+        for scene in result.get("scene_assets", []):
+            st.markdown(
+                f"**Scene {scene['scene_number']} — {scene.get('character_name', 'Character')} "
+                f"({scene.get('voice_role', '')})**: {scene['dialogue']}"
+            )
+        for line in result.get("logs", []):
+            st.text(line)
