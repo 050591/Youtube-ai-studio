@@ -52,13 +52,17 @@ if st.button("🚀 Generate Full Video", type="primary", use_container_width=Tru
         st.warning("தயவுசெய்து ஒரு ப்ராம்ட் உள்ளிடவும்.")
         st.stop()
 
-    with st.spinner("AI வீடியோ, கேரக்டர் குரல்கள் மற்றும் இசை உருவாகிறது..."):
-        result = run_youtube_agent(
-            user_prompt=prompt.strip(),
-            language=language,
-            content_format="shorts",
-            dry_run=dry_run,
-        )
+    try:
+        with st.spinner("AI வீடியோ, கேரக்டர் குரல்கள் மற்றும் இசை உருவாகிறது..."):
+            result = run_youtube_agent(
+                user_prompt=prompt.strip(),
+                language=language,
+                content_format="shorts",
+                dry_run=dry_run,
+            )
+    except Exception as exc:
+        st.error(f"Error: {type(exc).__name__} — {exc}")
+        st.stop()
 
     storyboard = result.get("storyboard", {})
     st.subheader(storyboard.get("title", "Generated Short"))
